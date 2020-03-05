@@ -15,7 +15,7 @@ func TestExecuteAndLogCapture(t *testing.T) {
 	defer os.RemoveAll(workDir)
 
 	assertFileContent := func(expected, filename string) {
-		b, err := ioutil.ReadFile(filename)
+		b, err := ioutil.ReadFile(path.Join(workDir, filename))
 		assert.Nil(t, err)
 		content := string(b)
 		assert.Equal(t, expected, content)

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -109,13 +110,14 @@ func validateParameters(params *Parameters) error {
 	return err
 }
 
-func prepareCommand(command []string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
+func prepareCommand(workdir string, command []string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
 	cmd := exec.Command(command[0], command[1:]...)
 
 	log.Printf("args: %v", cmd.Args)
 
 	if StdoutPath != "" {
-		stdout, err := os.Create(StdoutPath)
+
+		stdout, err := os.Create(path.Join(workdir, StdoutPath))
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +128,7 @@ func prepareCommand(command []string, StdoutPath string, StderrPath string) (*ex
 		if StderrPath == StdoutPath {
 			cmd.Stderr = cmd.Stdout
 		} else {
-			stderr, err := os.Create(StderrPath)
+			stderr, err := os.Create(path.Join(workdir, StderrPath))
 			if err != nil {
 				return nil, err
 			}
@@ -164,7 +166,7 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 	}
 
 	log.Printf("prepare command")
-	cmd, err := prepareCommand(params.Command, params.StdoutPath, params.StderrPath)
+	cmd, err := prepareCommand(workdir, params.Command, params.StdoutPath, params.StderrPath)
 	if err != nil {
 		return err
 	}
