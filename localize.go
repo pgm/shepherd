@@ -26,6 +26,17 @@ type Localizer interface {
 type Downloader struct {
 	downloadTimestamps map[string]time.Time
 	client             *storage.Client
+	workdir            string
+}
+
+func NewDownloader(workdir string) *Downloader {
+	client, err := storage.NewClient(context.Background())
+	if err != nil {
+		panic(err)
+	}
+	return &Downloader{downloadTimestamps: make(map[string]time.Time),
+		workdir: workdir,
+		client:  client}
 }
 
 func (d *Downloader) WasLocalized(path string) bool {
@@ -50,12 +61,16 @@ func splitGSCPath(url string) (string, string) {
 	return parts[1], parts[2]
 }
 
-func ensureParentDirExists(filename string) error {
-	dir := path.Dir(filename)
+func ensureDirExists(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return os.MkdirAll(dir, os.ModePerm)
 	}
 	return nil
+}
+
+func ensureParentDirExists(filename string) error {
+	dir := path.Dir(filename)
+	return ensureDirExists(dir)
 }
 
 func (d *Downloader) download(ctx context.Context, workdir string, download *Download) (string, error) {
@@ -93,11 +108,48 @@ func (d *Downloader) download(ctx context.Context, workdir string, download *Dow
 	return dstPath, nil
 }
 
-func (d *Downloader) Prepare(workdir string, downloads []*Download) error {
+func (d *Downloader) upload(ctx context.Context, srcPath string, destURL string) error {
+	bucketName, keyName := splitGSCPath(destURL)
+	bucket := d.client.Bucket(bucketName)
+	object := bucket.Object(keyName)
+
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	writer := object.NewWriter(ctx)
+	_, err = io.Copy(writer, f)
+	if err != nil {
+		return err
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+func (d *Downloader) Upload(uploads []*Upload) error {
+	ctx := context.Background()
+
+	for _, upload := range uploads {
+		err := d.upload(ctx, path.Join(d.workdir, upload.SourcePath), upload.DestinationURL)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *Downloader) Prepare(downloads []*Download) error {
 	ctx := context.Background()
 
 	for _, download := range downloads {
-		dstPath, err := d.download(ctx, workdir, download)
+		dstPath, err := d.download(ctx, d.workdir, download)
 		if err != nil {
 			return err
 		}

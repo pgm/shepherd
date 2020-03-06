@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestExecuteAndLogCapture(t *testing.T) {
@@ -122,7 +123,7 @@ func TestSimpleTransfers(t *testing.T) {
 	localizer.urlToContent["gs://mock/1"] = "one"
 
 	err = Execute(workDir, workDir, params, localizer)
-	assert.Nil(t, err)
+	require.Nil(t, err)
 
 	assert.Equal(t, map[string]string{"gs://mock/2": "one"}, localizer.uploaded)
 }

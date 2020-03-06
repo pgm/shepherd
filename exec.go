@@ -1,8 +1,10 @@
 package shepherd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -10,6 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+type Results struct {
+	ExitCode int `json:"exit_code"`
+}
 
 type Download struct {
 	SourceURL       string `json:"source_url"`
@@ -114,14 +120,27 @@ func validateParameters(params *Parameters) error {
 	return err
 }
 
-func prepareCommand(workdir string, command []string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
+func prepareCommand(workdir string, command []string, WorkingPath string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Dir = workdir
+	if WorkingPath == "" {
+		cmd.Dir = workdir
+	} else {
+		cmd.Dir = path.Join(workdir, WorkingPath)
+	}
+	err := ensureDirExists(cmd.Dir)
+	if err != nil {
+		return nil, err
+	}
 
 	log.Printf("args: %v", cmd.Args)
 
 	if StdoutPath != "" {
-		stdout, err := os.Create(path.Join(workdir, StdoutPath))
+		p := path.Join(workdir, StdoutPath)
+		err := ensureParentDirExists(p)
+		if err != nil {
+			return nil, err
+		}
+		stdout, err := os.Create(p)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +153,13 @@ func prepareCommand(workdir string, command []string, StdoutPath string, StderrP
 		if StderrPath == StdoutPath {
 			cmd.Stderr = cmd.Stdout
 		} else {
-			stderr, err := os.Create(path.Join(workdir, StderrPath))
+			p := path.Join(workdir, StderrPath)
+			err := ensureParentDirExists(p)
+			if err != nil {
+				return nil, err
+			}
+
+			stderr, err := os.Create(p)
 			if err != nil {
 				return nil, err
 			}
@@ -148,8 +173,22 @@ func prepareCommand(workdir string, command []string, StdoutPath string, StderrP
 }
 
 func writeResult(resultPath string, state *os.ProcessState) error {
-	//	panic("unimp")
-	log.Printf("Warning: writeResult unimplemented")
+	err := ensureParentDirExists(resultPath)
+	if err != nil {
+		return err
+	}
+
+	results := Results{ExitCode: state.ExitCode()}
+	b, err := json.Marshal(&results)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(resultPath, b, os.ModePerm)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -174,7 +213,7 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 	}
 
 	log.Printf("prepare command")
-	cmd, err := prepareCommand(workdir, params.Command, params.StdoutPath, params.StderrPath)
+	cmd, err := prepareCommand(workdir, params.Command, params.WorkingPath, params.StdoutPath, params.StderrPath)
 	if err != nil {
 		return err
 	}
@@ -194,9 +233,11 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 	}
 
 	log.Printf("write result")
-	err = writeResult(params.ResultPath, cmd.ProcessState)
-	if err != nil {
-		return err
+	if params.ResultPath != "" {
+		err = writeResult(path.Join(workdir, params.ResultPath), cmd.ProcessState)
+		if err != nil {
+			return err
+		}
 	}
 
 	err = uploadResults(workdir, params.Uploads, localizer)
