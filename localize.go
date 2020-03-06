@@ -43,7 +43,7 @@ func (d *Downloader) WasLocalized(path string) bool {
 	return true
 }
 
-var GSCPathExpr = regexp.MustCompile("gs://([^/])/(.*)$")
+var GSCPathExpr = regexp.MustCompile("gs://([^/]+)/?(.*)$")
 
 func splitGSCPath(url string) (string, string) {
 	parts := GSCPathExpr.FindStringSubmatch(url)

@@ -1,7 +1,9 @@
 package shepherd
 
 import (
+	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"path"
 	"testing"
@@ -70,7 +72,10 @@ func (m *MockLocalizer) WasLocalized(path string) bool {
 
 func (m *MockLocalizer) Prepare(downloads []*Download) error {
 	for _, download := range downloads {
-		content := m.urlToContent[download.SourceURL]
+		content, exists := m.urlToContent[download.SourceURL]
+		if !exists {
+			panic(fmt.Errorf("Could not find %s", download.SourceURL))
+		}
 		f, err := os.Create(path.Join(m.workDir, download.DestinationPath))
 		if err != nil {
 			panic(err)
@@ -103,17 +108,18 @@ func (m *MockLocalizer) Clean() {
 func TestSimpleTransfers(t *testing.T) {
 	workDir, err := ioutil.TempDir("", t.Name())
 	assert.Nil(t, err)
-	defer os.RemoveAll(workDir)
+	log.Printf("test dir: %s", workDir)
+	//defer os.RemoveAll(workDir)
 
 	params := &Parameters{
-		Uploads: &UploadPatterns{IncludePatterns: []string{"*"},
-			DestinationURL: "gs://mock"},
+		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
+			DestinationURLPrefix: "gs://mock"},
 		Downloads: []*Download{&Download{SourceURL: "gs://mock/1",
 			DestinationPath: "1"}},
 		Command: []string{"cp", "1", "2"}}
 
 	localizer := NewMockLocalizer(workDir)
-	localizer.urlToContent["1"] = "one"
+	localizer.urlToContent["gs://mock/1"] = "one"
 
 	err = Execute(workDir, workDir, params, localizer)
 	assert.Nil(t, err)
@@ -121,21 +127,20 @@ func TestSimpleTransfers(t *testing.T) {
 	assert.Equal(t, map[string]string{"gs://mock/2": "one"}, localizer.uploaded)
 }
 
-func TestDirTransfers(t *testing.T) {
+func TestDirUpload(t *testing.T) {
 	workDir, err := ioutil.TempDir("", t.Name())
 	assert.Nil(t, err)
 	defer os.RemoveAll(workDir)
 
 	params := &Parameters{
-		Uploads: &UploadPatterns{IncludePatterns: []string{"*"},
-			DestinationURL: "gs://mock"},
-		Command: []string{"bash", "-c", "\"mkdir subdir ; echo one > subdir/2 ; echo hello > subdir/hello.txt \""}}
+		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
+			DestinationURLPrefix: "gs://mock"},
+		Command: []string{"bash", "-c", "echo -n one > 1 && mkdir subdir && echo -n two > subdir/2 && echo -n hello > subdir/hello.txt"}}
 
 	localizer := NewMockLocalizer(workDir)
-	localizer.urlToContent["1"] = "one"
 
 	err = Execute(workDir, workDir, params, localizer)
 	assert.Nil(t, err)
 
-	assert.Equal(t, map[string]string{"gs://mock/subdir/2": "one", "gs://mock/subdir/hello.txt": "hello"}, localizer.uploaded)
+	assert.Equal(t, map[string]string{"gs://mock/subdir/2": "two", "gs://mock/1": "one", "gs://mock/subdir/hello.txt": "hello"}, localizer.uploaded)
 }

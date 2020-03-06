@@ -23,10 +23,14 @@ type Upload struct {
 	DestinationURL string
 }
 
+type Filter struct {
+	Pattern string `json:"pattern"`
+	Exclude bool   `json:"exclude"`
+}
+
 type UploadPatterns struct {
-	IncludePatterns []string `json:"include_patterns"`
-	ExcludePatterns []string `json:"exclude_patterns"`
-	DestinationURL  string   `json:"destination_url"`
+	Filters              []*Filter `json:"filters"`
+	DestinationURLPrefix string    `json:"destination_url_prefix"`
 }
 
 type Parameters struct {
@@ -72,7 +76,7 @@ func validateParameters(params *Parameters) error {
 
 	if err == nil {
 		if params.Uploads != nil {
-			err = validateURL(params.Uploads.DestinationURL)
+			err = validateURL(params.Uploads.DestinationURLPrefix)
 		}
 	}
 
@@ -112,16 +116,18 @@ func validateParameters(params *Parameters) error {
 
 func prepareCommand(workdir string, command []string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
 	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Dir = workdir
 
 	log.Printf("args: %v", cmd.Args)
 
 	if StdoutPath != "" {
-
 		stdout, err := os.Create(path.Join(workdir, StdoutPath))
 		if err != nil {
 			return nil, err
 		}
 		cmd.Stdout = stdout
+	} else {
+		cmd.Stdout = os.Stdout
 	}
 
 	if StdoutPath != "" {
@@ -134,6 +140,8 @@ func prepareCommand(workdir string, command []string, StdoutPath string, StderrP
 			}
 			cmd.Stderr = stderr
 		}
+	} else {
+		cmd.Stderr = os.Stderr
 	}
 
 	return cmd, nil
@@ -199,42 +207,74 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 	return nil
 }
 
-func uploadResults(workdir string, uploads *UploadPatterns, localizer Localizer) error {
-	if uploads != nil {
-		matchesUploadPattern := func(path string) bool {
-			include := false
-			for _, includePattern := range uploads.IncludePatterns {
-				matched, _ := filepath.Match(includePattern, path)
-				if matched {
-					include = true
-				}
-			}
-			for _, excludePattern := range uploads.ExcludePatterns {
-				matched, _ := filepath.Match(excludePattern, path)
-				if matched {
-					include = false
-				}
-			}
-			return include
+func matchesInclusionPattern(name string, filters []*Filter) bool {
+	exclude := true
+	baseName := path.Base(name)
+	for _, filter := range filters {
+		fullNameMatched, _ := filepath.Match(filter.Pattern, name)
+		baseNameMatched, _ := filepath.Match(filter.Pattern, baseName)
+		if fullNameMatched || baseNameMatched {
+			exclude = filter.Exclude
+		}
+	}
+	return !exclude
+}
+
+func findNewFiles(workdir string, filters []*Filter, localizer HasLocalizedCheck) ([]string, error) {
+	filenames := make([]string, 0, 100)
+	err := filepath.Walk(workdir, func(_path string, info os.FileInfo, err error) error {
+		relPath, err := filepath.Rel(workdir, _path)
+		if err != nil {
+			panic(err) // should not be possible
 		}
 
-		panic("unimp")
-		filepath.Walk(workdir, func(path string, info os.FileInfo, err error) error {
-			if info.IsDir() {
+		if info.IsDir() {
+			if matchesInclusionPattern(relPath, filters) {
 				return nil
+			} else {
+				return filepath.SkipDir
 			}
+		}
 
-			if localizer.WasLocalized(path) {
-
-			}
-
-			if matchesUploadPattern(path) {
-
-			}
+		if localizer.WasLocalized(relPath) {
 			return nil
-		})
+		}
+
+		if matchesInclusionPattern(relPath, filters) {
+			filenames = append(filenames, relPath)
+		}
+		return nil
+	})
+	return filenames, err
+}
+
+func uploadResults(workdir string, uploadPatterns *UploadPatterns, localizer Localizer) error {
+	if uploadPatterns != nil {
+		filenames, err := findNewFiles(workdir, uploadPatterns.Filters, localizer)
+		if err != nil {
+			return err
+		}
+		uploads := make([]*Upload, len(filenames))
+		for i, filename := range filenames {
+			uploads[i] = &Upload{SourcePath: filename, DestinationURL: joinURL(uploadPatterns.DestinationURLPrefix, filename)}
+		}
+		err = localizer.Upload(uploads)
+		if err != nil {
+			return err
+		}
 	}
+
 	return nil
+}
+
+func joinURL(prefix string, suffix string) string {
+	if strings.HasPrefix(suffix, "/") {
+		panic(fmt.Sprintf("path %s should not start with /", suffix))
+	}
+	if strings.HasSuffix(prefix, "/") {
+		return prefix + suffix
+	}
+	return prefix + "/" + suffix
 }
 
 // type ResultFile struct {
