@@ -122,15 +122,7 @@ func validateParameters(params *Parameters) error {
 
 func prepareCommand(workdir string, command []string, WorkingPath string, StdoutPath string, StderrPath string) (*exec.Cmd, error) {
 	cmd := exec.Command(command[0], command[1:]...)
-	if WorkingPath == "" {
-		cmd.Dir = workdir
-	} else {
-		cmd.Dir = path.Join(workdir, WorkingPath)
-	}
-	err := ensureDirExists(cmd.Dir)
-	if err != nil {
-		return nil, err
-	}
+	cmd.Dir = WorkingPath
 
 	log.Printf("args: %v", cmd.Args)
 
@@ -192,6 +184,8 @@ func writeResult(resultPath string, state *os.ProcessState) error {
 	return nil
 }
 
+const DockerWorkRoot = "/mnt/shepherd"
+
 func Execute(workRoot string, workdir string, params *Parameters, localizer Localizer) error {
 	log.Printf("validate")
 	err := validateParameters(params)
@@ -207,13 +201,33 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 
 	defer localizer.Clean()
 
+	var fullWorkPath string
+	if params.WorkingPath == "" {
+		fullWorkPath = workdir
+	} else {
+		fullWorkPath = path.Join(workdir, params.WorkingPath)
+	}
+	err = ensureDirExists(fullWorkPath)
+	if err != nil {
+		return err
+	}
+
 	command := params.Command
 	if params.DockerImage != "" {
-		command = append([]string{"docker", "run", "-v", workRoot + ":" + workRoot, "-w", workdir, "--interactive", "--rm", params.DockerImage}, command...)
+		relWorkDir, err := filepath.Rel(workRoot, fullWorkPath)
+		if err != nil {
+			panic(err)
+		}
+		dockerWorkDir := path.Join(DockerWorkRoot, relWorkDir)
+		absWorkRoot, err := filepath.Abs(workRoot)
+		if err != nil {
+			panic(err)
+		}
+		command = append([]string{"docker", "run", "-v", absWorkRoot + ":" + DockerWorkRoot, "-w", dockerWorkDir, "--interactive", "--rm", params.DockerImage}, command...)
 	}
 
 	log.Printf("prepare command")
-	cmd, err := prepareCommand(workdir, params.Command, params.WorkingPath, params.StdoutPath, params.StderrPath)
+	cmd, err := prepareCommand(workdir, command, fullWorkPath, params.StdoutPath, params.StderrPath)
 	if err != nil {
 		return err
 	}

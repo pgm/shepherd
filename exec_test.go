@@ -46,6 +46,34 @@ func TestExecuteAndLogCapture(t *testing.T) {
 	assertFileContent("err\n", "err.txt")
 }
 
+func TestDocker(t *testing.T) {
+	workDir, err := ioutil.TempDir(".", t.Name())
+	assert.Nil(t, err)
+	defer os.RemoveAll(workDir)
+
+	params := &Parameters{
+		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
+			DestinationURLPrefix: "gs://mock"},
+		Downloads: []*Download{&Download{SourceURL: "gs://mock/1",
+			DestinationPath: "1"}},
+		DockerImage: "alpine:3.7",
+		Command:     []string{"sh", "-c", "echo out && echo err 1>&2 && cp 1 2"},
+		StdoutPath:  "out.txt",
+		StderrPath:  "err.txt"}
+
+	localizer := NewMockLocalizer(workDir)
+	localizer.urlToContent["gs://mock/1"] = "one"
+
+	err = Execute(workDir, workDir, params, localizer)
+	assert.Nil(t, err)
+
+	assert.Equal(t, map[string]string{"gs://mock/2": "one",
+		"gs://mock/out.txt": "out\n",
+		"gs://mock/err.txt": "err\n"},
+		localizer.uploaded)
+
+}
+
 // type Localizer interface {
 // 	WasLocalized(path string) bool
 // 	Prepare(downloads []*Download) error
