@@ -30,7 +30,7 @@ func TestExecuteAndLogCapture(t *testing.T) {
 		StdoutPath: "merged.txt",
 		StderrPath: "merged.txt"}
 
-	err = Execute(workDir, workDir, params, NewMockLocalizer(workDir))
+	err = Execute(workDir, workDir, params, NewMockLocalizer(workDir), NewMockUploader(workDir))
 	assert.Nil(t, err)
 	assertFileContent("out\nerr\n", "merged.txt")
 
@@ -40,7 +40,7 @@ func TestExecuteAndLogCapture(t *testing.T) {
 		StdoutPath: "out.txt",
 		StderrPath: "err.txt"}
 
-	err = Execute(workDir, workDir, params, NewMockLocalizer(workDir))
+	err = Execute(workDir, workDir, params, NewMockLocalizer(workDir), NewMockUploader(workDir))
 	assert.Nil(t, err)
 	assertFileContent("out\n", "out.txt")
 	assertFileContent("err\n", "err.txt")
@@ -63,36 +63,38 @@ func TestDocker(t *testing.T) {
 
 	localizer := NewMockLocalizer(workDir)
 	localizer.urlToContent["gs://mock/1"] = "one"
+	uploader := NewMockUploader(workDir)
 
-	err = Execute(workDir, workDir, params, localizer)
+	err = Execute(workDir, workDir, params, localizer, uploader)
 	assert.Nil(t, err)
 
 	assert.Equal(t, map[string]string{"gs://mock/2": "one",
 		"gs://mock/out.txt": "out\n",
 		"gs://mock/err.txt": "err\n"},
-		localizer.uploaded)
+		uploader.uploaded)
 
 }
-
-// type Localizer interface {
-// 	WasLocalized(path string) bool
-// 	Prepare(downloads []*Download) error
-// 	Upload(uploads []*Upload) error
-// 	Clean()
-// }
 
 type MockLocalizer struct {
 	workDir      string
 	localized    map[string]bool
 	urlToContent map[string]string // url -> content
-	uploaded     map[string]string // url -> content
 }
 
 func NewMockLocalizer(workDir string) *MockLocalizer {
 	return &MockLocalizer{workDir: workDir,
 		localized:    make(map[string]bool),
-		urlToContent: make(map[string]string),
-		uploaded:     make(map[string]string)}
+		urlToContent: make(map[string]string)}
+}
+
+type MockUploader struct {
+	workDir  string
+	uploaded map[string]string // url -> content
+}
+
+func NewMockUploader(workDir string) *MockUploader {
+	return &MockUploader{workDir: workDir,
+		uploaded: make(map[string]string)}
 }
 
 func (m *MockLocalizer) WasLocalized(path string) bool {
@@ -116,7 +118,7 @@ func (m *MockLocalizer) Prepare(downloads []*Download) error {
 	return nil
 }
 
-func (m *MockLocalizer) Upload(uploads []*Upload) error {
+func (m *MockUploader) Upload(uploads []*Upload) error {
 	for _, upload := range uploads {
 		f, err := os.Open(path.Join(m.workDir, upload.SourcePath))
 		if err != nil {
@@ -138,7 +140,6 @@ func TestSimpleTransfers(t *testing.T) {
 	workDir, err := ioutil.TempDir("", t.Name())
 	assert.Nil(t, err)
 	log.Printf("test dir: %s", workDir)
-	//defer os.RemoveAll(workDir)
 
 	params := &Parameters{
 		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
@@ -149,11 +150,12 @@ func TestSimpleTransfers(t *testing.T) {
 
 	localizer := NewMockLocalizer(workDir)
 	localizer.urlToContent["gs://mock/1"] = "one"
+	uploader := NewMockUploader(workDir)
 
-	err = Execute(workDir, workDir, params, localizer)
+	err = Execute(workDir, workDir, params, localizer, uploader)
 	require.Nil(t, err)
 
-	assert.Equal(t, map[string]string{"gs://mock/2": "one"}, localizer.uploaded)
+	assert.Equal(t, map[string]string{"gs://mock/2": "one"}, uploader.uploaded)
 }
 
 func TestDirUpload(t *testing.T) {
@@ -167,9 +169,71 @@ func TestDirUpload(t *testing.T) {
 		Command: []string{"bash", "-c", "echo -n one > 1 && mkdir subdir && echo -n two > subdir/2 && echo -n hello > subdir/hello.txt"}}
 
 	localizer := NewMockLocalizer(workDir)
+	uploader := NewMockUploader(workDir)
 
-	err = Execute(workDir, workDir, params, localizer)
+	err = Execute(workDir, workDir, params, localizer, uploader)
 	assert.Nil(t, err)
 
-	assert.Equal(t, map[string]string{"gs://mock/subdir/2": "two", "gs://mock/1": "one", "gs://mock/subdir/hello.txt": "hello"}, localizer.uploaded)
+	assert.Equal(t,
+		map[string]string{"gs://mock/subdir/2": "two", "gs://mock/1": "one", "gs://mock/subdir/hello.txt": "hello"},
+		uploader.uploaded)
+}
+
+func TestGCSMount(t *testing.T) {
+	rootDir, err := ioutil.TempDir("", t.Name())
+	assert.Nil(t, err)
+	//defer os.RemoveAll(rootDir)
+	log.Printf("rootDir %s", rootDir)
+
+	// make mock gcsfuse script that we'll run instead of the normal mount command
+	mockGCSExecutable := path.Join(rootDir, "mockgcsfuse")
+	mockGCSScript := []byte(`#!/usr/bin/python
+import sys
+import time
+import os
+bucket_name = sys.argv[-2]
+mount_dir = sys.argv[-1]
+
+os.mkdir(mount_dir+"/something")
+with open(mount_dir+"/something/1", "wt") as fd:
+	fd.write(bucket_name)
+#while True:
+#	print("sleeping...")
+#	time.sleep(1000)
+	`)
+
+	mockUmountScript := []byte(`#!/usr/bin/python
+import sys
+sys.exit(0)
+		`)
+	mockUmountExecutable := path.Join(rootDir, "mockumount")
+
+	err = ioutil.WriteFile(mockGCSExecutable, mockGCSScript, 0700)
+	if err != nil {
+		panic(err)
+	}
+	err = ioutil.WriteFile(mockUmountExecutable, mockUmountScript, 0700)
+	if err != nil {
+		panic(err)
+	}
+
+	workDir := path.Join(rootDir, "work")
+
+	params := &Parameters{
+		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
+			DestinationURLPrefix: "gs://mock"},
+		Downloads: []*Download{&Download{SourceURL: "gs://mock/something/1",
+			DestinationPath: "1"}},
+		Command: []string{"cp", "1", "2"}}
+
+	localizer := NewGCSMounter(rootDir, workDir)
+	localizer.gcsfuseExecutable = mockGCSExecutable
+	localizer.umountExecutable = mockUmountExecutable
+
+	uploader := NewMockUploader(workDir)
+	fmt.Printf("rootDir: %s", rootDir)
+	err = Execute(rootDir, workDir, params, localizer, uploader)
+	assert.Nil(t, err)
+
+	assert.Equal(t, map[string]string{"gs://mock/2": "mock"}, uploader.uploaded)
 }

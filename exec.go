@@ -186,7 +186,7 @@ func writeResult(resultPath string, state *os.ProcessState) error {
 
 const DockerWorkRoot = "/mnt/shepherd"
 
-func Execute(workRoot string, workdir string, params *Parameters, localizer Localizer) error {
+func Execute(workRoot string, workdir string, params *Parameters, localizer Localizer, uploader Uploader) error {
 	log.Printf("validate")
 	err := validateParameters(params)
 	if err != nil {
@@ -254,7 +254,7 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 		}
 	}
 
-	err = uploadResults(workdir, params.Uploads, localizer)
+	err = uploadResults(workdir, params.Uploads, localizer, uploader)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func findNewFiles(workdir string, filters []*Filter, localizer HasLocalizedCheck
 	return filenames, err
 }
 
-func uploadResults(workdir string, uploadPatterns *UploadPatterns, localizer Localizer) error {
+func uploadResults(workdir string, uploadPatterns *UploadPatterns, localizer Localizer, uploader Uploader) error {
 	if uploadPatterns != nil {
 		filenames, err := findNewFiles(workdir, uploadPatterns.Filters, localizer)
 		if err != nil {
@@ -313,7 +313,7 @@ func uploadResults(workdir string, uploadPatterns *UploadPatterns, localizer Loc
 		for i, filename := range filenames {
 			uploads[i] = &Upload{SourcePath: filename, DestinationURL: joinURL(uploadPatterns.DestinationURLPrefix, filename)}
 		}
-		err = localizer.Upload(uploads)
+		err = uploader.Upload(uploads)
 		if err != nil {
 			return err
 		}
