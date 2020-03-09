@@ -53,6 +53,7 @@ func (d *Downloader) WasLocalized(p string) bool {
 	}
 
 	origTime, exists := d.downloadTimestamps[p]
+	// log.Printf("p=%s, origTime=%v, exists=%v downloadTimestamps=%v", p, origTime, exists, d.downloadTimestamps)
 	if exists && origTime.Equal(fi.ModTime()) {
 		return true
 	}
@@ -165,7 +166,7 @@ func (d *Downloader) Prepare(downloads []*Download) error {
 			panic(err)
 		}
 
-		d.downloadTimestamps[dstPath] = fi.ModTime()
+		d.downloadTimestamps[download.DestinationPath] = fi.ModTime()
 	}
 
 	return nil

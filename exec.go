@@ -124,8 +124,6 @@ func prepareCommand(workdir string, command []string, WorkingPath string, Stdout
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Dir = WorkingPath
 
-	log.Printf("args: %v", cmd.Args)
-
 	if StdoutPath != "" {
 		p := path.Join(workdir, StdoutPath)
 		err := ensureParentDirExists(p)
@@ -187,13 +185,13 @@ func writeResult(resultPath string, state *os.ProcessState) error {
 const DockerWorkRoot = "/mnt/shepherd"
 
 func Execute(workRoot string, workdir string, params *Parameters, localizer Localizer, uploader Uploader) error {
-	log.Printf("validate")
+	log.Printf("Validating parameters...")
 	err := validateParameters(params)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("prepare")
+	log.Printf("Preparing %s with %d files in GCS...", workdir, len(params.Downloads))
 	err = localizer.Prepare(params.Downloads)
 	if err != nil {
 		return err
@@ -226,19 +224,18 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 		command = append([]string{"docker", "run", "-v", absWorkRoot + ":" + DockerWorkRoot, "-w", dockerWorkDir, "--interactive", "--rm", params.DockerImage}, command...)
 	}
 
-	log.Printf("prepare command")
 	cmd, err := prepareCommand(workdir, command, fullWorkPath, params.StdoutPath, params.StderrPath)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("start command")
+	log.Printf("With working dir %s, running command: %v", cmd.Dir, cmd.Args)
 	err = cmd.Start()
 	if err != nil {
 		return err
 	}
 
-	log.Printf("wait command")
+	log.Printf("Waiting for command to complete")
 	err = cmd.Wait()
 	if _, isExitError := err.(*exec.ExitError); isExitError {
 		log.Printf("Exited with failure: %s", err)
@@ -246,7 +243,7 @@ func Execute(workRoot string, workdir string, params *Parameters, localizer Loca
 		return err
 	}
 
-	log.Printf("write result")
+	log.Printf("Command completed, writing exit code (%d) to %s", cmd.ProcessState.ExitCode(), params.ResultPath)
 	if params.ResultPath != "" {
 		err = writeResult(path.Join(workdir, params.ResultPath), cmd.ProcessState)
 		if err != nil {
@@ -291,9 +288,12 @@ func findNewFiles(workdir string, filters []*Filter, localizer HasLocalizedCheck
 			}
 		}
 
+		// log.Printf("checking localizer.WasLocalized(%s)", relPath)
 		if localizer.WasLocalized(relPath) {
+			// log.Printf("true")
 			return nil
 		}
+		// log.Printf("false")
 
 		if matchesInclusionPattern(relPath, filters) {
 			filenames = append(filenames, relPath)
@@ -313,10 +313,12 @@ func uploadResults(workdir string, uploadPatterns *UploadPatterns, localizer Loc
 		for i, filename := range filenames {
 			uploads[i] = &Upload{SourcePath: filename, DestinationURL: joinURL(uploadPatterns.DestinationURLPrefix, filename)}
 		}
+		log.Printf("Uploading %d files to %s", len(uploads), uploadPatterns.DestinationURLPrefix)
 		err = uploader.Upload(uploads)
 		if err != nil {
 			return err
 		}
+		log.Printf("Upload completed")
 	}
 
 	return nil

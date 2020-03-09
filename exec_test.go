@@ -179,11 +179,11 @@ func TestDirUpload(t *testing.T) {
 		uploader.uploaded)
 }
 
-func TestGCSMount(t *testing.T) {
+func testGCSMount(t *testing.T, withSymlinks bool) {
 	rootDir, err := ioutil.TempDir("", t.Name())
 	assert.Nil(t, err)
-	//defer os.RemoveAll(rootDir)
-	log.Printf("rootDir %s", rootDir)
+	defer os.RemoveAll(rootDir)
+	//log.Printf("rootDir %s", rootDir)
 
 	// make mock gcsfuse script that we'll run instead of the normal mount command
 	mockGCSExecutable := path.Join(rootDir, "mockgcsfuse")
@@ -197,6 +197,7 @@ mount_dir = sys.argv[-1]
 os.mkdir(mount_dir+"/something")
 with open(mount_dir+"/something/1", "wt") as fd:
 	fd.write(bucket_name)
+os.chmod(mount_dir+"/something/1", 0o555)
 #while True:
 #	print("sleeping...")
 #	time.sleep(1000)
@@ -223,7 +224,7 @@ sys.exit(0)
 		Uploads: &UploadPatterns{Filters: []*Filter{&Filter{Pattern: "*"}},
 			DestinationURLPrefix: "gs://mock"},
 		Downloads: []*Download{&Download{SourceURL: "gs://mock/something/1",
-			DestinationPath: "1"}},
+			DestinationPath: "1", SymlinkSafe: withSymlinks}},
 		Command: []string{"cp", "1", "2"}}
 
 	localizer := NewGCSMounter(rootDir, workDir)
@@ -236,4 +237,9 @@ sys.exit(0)
 	assert.Nil(t, err)
 
 	assert.Equal(t, map[string]string{"gs://mock/2": "mock"}, uploader.uploaded)
+}
+
+func TestGCSMount(t *testing.T) {
+	testGCSMount(t, true)
+	testGCSMount(t, false)
 }
